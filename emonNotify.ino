@@ -24,9 +24,11 @@
   SOFTWARE.
 */
 
+#define RF69_COMPAT 1                                                    // Set to 1 if using RFM69CW or 0 is using RFM12B
 
-#define RF69_COMPAT 1                                                              // Set to 1 if using RFM69CW or 0 is using RFM12B
+#define DEBUG 1
 
+#define EMON_NOTIFY_DISPLAY_NUMBER 0        //Multiple display may be possible in the future with different outputs
 #define RF_freq RF12_433MHZ                                              // Frequency of RF69CW module can be RF12_433MHZ, RF12_868MHZ or RF12_915MHZ. You should use the one matching the module you have.
 
 //Time between pages in 10ms counts (500= 5 seconds)
@@ -35,7 +37,7 @@
 //Time between reading one-wire temperature (30 seconds)
 #define TIME_BETWEEN_TEMP_READINGS 3000;
 
-#define MAXIMUM_READING_BUFFER 20
+#define MAXIMUM_READING_BUFFER 10
 #define RF_FrequencyCorrection  1600
 
 #define BACKLIGHT_LED_PIN 9
@@ -65,7 +67,8 @@ const int networkGroup = 210;
 
 int tempSensors = 0;
 
-float readings[MAXIMUM_READING_BUFFER];
+int32_t reading[MAXIMUM_READING_BUFFER];
+char feedlabel[MAXIMUM_READING_BUFFER][15];
 
 int page = 1;
 int maxpage = 0;
@@ -74,7 +77,8 @@ int temp_counter = 0;
 
 int counter = 0;
 
-float Read4ByteFloat(uint8_t *d, int offset) {
+/*
+  float Read4ByteFloat(uint8_t *d, int offset) {
   union ArrayToFloat {
     byte array[4];
     float value;
@@ -88,7 +92,8 @@ float Read4ByteFloat(uint8_t *d, int offset) {
   converter.array[3] = d[offset + 3] ;
 
   return converter.value;
-}
+  }
+*/
 
 int32_t Read4ByteInt32(uint8_t *d, int offset) {
   union ArrayTouint32_t {
@@ -106,43 +111,30 @@ int32_t Read4ByteInt32(uint8_t *d, int offset) {
   return converter.integer;
 }
 
-boolean RF_Rx_Handle() {
-
-  if (rf12_recvDone()) {    //if RF Packet is received
-    if (rf12_crc == 0) {    //Check packet is good
-
-      //Only allow packets addressed to me
-      if ((rf12_hdr & RF12_HDR_MASK) == nodeID    ) {
-        return (1);
-      }
-    }
-  }
-
-  return (0);
-}
-
 
 void setup() {
   // put your setup code here, to run once:
-  memset(readings, 0, sizeof(readings));
+  memset(reading, 0, sizeof(reading));
 
   //Seed clock to a sensible date before we receive a reading from emonHUB
   setTime(1501545600);
 
-  //Serial.begin(38400);  Serial.println("emonNOTIFY");
+#if DEBUG
+  Serial.begin(38400);  Serial.println("emonNOTIFY");
+#endif
 
   // Set Backlight Intensity
-  // 0 is Fully bright
-  // 255 is off
+  // 0 is off
+  // 255 is on
   analogWrite(BACKLIGHT_LED_PIN, 0);
 
   u8g2.begin();
 
   sensors.begin();
   tempSensors = sensors.getDeviceCount();
-  if (tempSensors != 0){
+  if (tempSensors != 0) {
     sensors.getAddress(address_T1, 0);                  //get the address of the first detected sensor
-  }    
+  }
 
   //initialize RFM12B/rfm69CW
   rf12_initialize(nodeID, RF_freq, networkGroup, RF_FrequencyCorrection );
@@ -150,60 +142,54 @@ void setup() {
   //test();
 }
 
-/*
-  void test() {
-  outputReading(1234.56, 0); delay(2000);
-  outputReading(1234.00, 0); delay(2000);
-  outputReading(-5, 0); delay(2000);
-  outputReading(-5.15, 0); delay(2000);
-  outputReading(2.15, 0); delay(2000);
-  outputReading(0.00, 0); delay(2000);
-  outputReading(-0.15, 0); delay(2000);
-  outputReading(-0.25, 0); delay(2000);
-  outputReading(-0.55, 0); delay(2000);
-
-  float f = -2.15;
-  for (int index = 0; index < 500; index++) {
-    //Serial.println(f);
-    outputReading(f, 0);
-    f += 0.03;
-    delay(100);
-  }
-  }
-*/
-
 //Display buffer
-char s[20];
-char header[20];
+//char s[20];
+char charbuffer[40];
 
-float temperature;
+int temperature;
 
-void loop() {
+void process_packet() {
 
-  if (tempSensors != 0 && temp_counter==0){
-    sensors.requestTemperatures();                    // Request Temperature from sensors
-    temperature = sensors.getTempC(address_T1);// * 100;
+#if DEBUG
+  analogWrite(BACKLIGHT_LED_PIN, 255);
+#endif
 
-    temp_counter=TIME_BETWEEN_TEMP_READINGS;
-  }
-  
-  if (RF_Rx_Handle() == 1) {                                                    
-    // Returns true if RF packet is received so we have just received a fresh packet of data from emonPI
-    int i = 0;
-    int x = 0;
+  int i = 0;
+  int x = 0;
 
-    memset(readings, 0, sizeof(readings));
+
+  //First byte is a header - is this for our display?
+  uint8_t device = (rf12_data[i] & 0xF0) >> 4;
+
+#if DEBUG
+  Serial.print("device="); Serial.println(device);
+#endif
+  //If this message is not for me, quit out
+  if (device != EMON_NOTIFY_DISPLAY_NUMBER) return;
+
+  uint8_t message_type = rf12_data[i] & 0x0F;
+  i++;
+
+#if DEBUG
+  Serial.print("type="); Serial.println(message_type);
+#endif
+
+
+  if (message_type == 0) {
+    // New set of readings/feed values...
+    // Clear existing array
+    memset(reading, 0, sizeof(reading));
     while (i < rf12_len && x < MAXIMUM_READING_BUFFER ) {
-      //First 4 bytes are the date time in EPOCH format
 
-      //TODO: MORE PACKET HANDLING HERE
-
+      //4 bytes are the date time in EPOCH format
       if (x == 0) {
         //TIME
         setTime(Read4ByteInt32(rf12_data, i));
       } else {
-        readings[x] = Read4ByteFloat(rf12_data, i);
-        //Serial.print(x); Serial.print(" value="); Serial.println(readings[x]);
+        reading[x] = Read4ByteInt32(rf12_data, i);
+#if DEBUG
+        Serial.print("value="); Serial.println(reading[x]);
+#endif
       }
 
       i += sizeof(int32_t);
@@ -211,117 +197,186 @@ void loop() {
     }
 
     maxpage = x;
+    return;
+  }
+
+  if (message_type == 1) {
+    //Its a label....
+    uint8_t sequence = rf12_data[i++];
+
+    #if DEBUG
+    Serial.print("seq=");
+    Serial.println(sequence);
+    #endif
+
+    while (i < rf12_len) {
+      Serial.print(rf12_data[i], HEX);
+      Serial.print(' ');
+      i++;      
+    }
+    Serial.println();
+
+    strcpy(feedlabel[sequence], "STUART");
+
+    //strncpy(feedlabel[sequence], rf12_data[i], sizeof(feedlabel[sequence]) );
+
+    #if DEBUG
+      //Serial.println(feedlabel[sequence]);
+    #endif
+    return;
+  }
+
+}
+
+void loop() {
+
+  if (tempSensors != 0 && temp_counter == 0) {
+    // Request Temperature from sensor
+    sensors.requestTemperatures();
+    //Temperature in Celcius multiplied by 100
+    temperature = sensors.getTempC(address_T1) * 100;
+    temp_counter = TIME_BETWEEN_TEMP_READINGS;
+  }
+
+
+  if (rf12_recvDone()) {    //if RF Packet is received
+    if (rf12_crc == 0) {    //Check packet is good
+
+      //Only allow packets addressed to me
+      if ((rf12_hdr & RF12_HDR_MASK) == nodeID    ) {
+        // Returns 1 if RF packet is received so we have just
+        // received a fresh packet of data from emonPI
+        process_packet();
+      }
+    }
   }
 
   if (counter == 0) {
+
+    //Counter has reached zero, so refresh display  with new page of data
+    analogWrite(BACKLIGHT_LED_PIN, 100);
+
+    //Reset counter
     counter = TIME_BETWEEN_PAGES;
+
+    //Move to next page
     page++;
 
+    //Loop to start if needed (page 1 = first, zero means no data received yet)
     if (page >= maxpage) {
       page = 1;
     }
 
-    if (maxpage == 0) {
-      //We dont have any data yet
-
-    } else {
-      //Clear buffers
-      memset(s, 0, sizeof(s));
-      outputReading(s, readings[page], 0);
-
-      //LCD is 84x48 pixels
-      u8g2.clearBuffer();
-      u8g2.setDrawColor(1);
-      u8g2.setFontMode(0);
-
-      //May need to pick a smaller font if you need more than 99999.99 digits
-      //https://github.com/olikraus/u8g2/wiki/fntlistall
-      //Font is 14 pixels high
-      u8g2.setFont(u8g2_font_crox4hb_tf);
-      //Centre output
-      int width = u8g2.getStrWidth(s);
-      u8g2.drawStr(LCD_WIDTH / 2 - width / 2, LCD_HEIGHT/2 + 14/2, s);
-    }
-
-    //Draw header inversed across top using 6 pixel high font
-    //Font is 6 pixels high
-    u8g2.setFont(u8g2_font_profont10_mr);
-    u8g2.setFontMode(1);
-    u8g2.drawBox(0, 0, LCD_WIDTH, 6 + 2);
-    u8g2.setDrawColor(2);
-
-    //Right align clock in top right corner
-    sprintf(header, "%02d:%02d", hour(), minute());
-    u8g2.drawStr(LCD_WIDTH - 1 - u8g2.getStrWidth(header), 6 + 1, header);
-
-    ftoa(header, temperature, 10);
-    //header[4]='°';
-    header[4]='C';
-    header[5]=0x00;
-    u8g2.drawStr(24, 6 + 1, header);
-
+    draw_header(page);
     if (maxpage != 0) {
-      //Print current page in top left
-      sprintf(header, "%02d", page);
-      u8g2.drawStr(2, 6 + 1, header);
-
-      //Display units underneath reading
-      /*
-       * Commented out for now as we dont know what units the values relate to.
-      strcpy(header,"kW/h");
-      u8g2.setDrawColor(1);
-      u8g2.setFontMode(0);
-      u8g2.drawStr(LCD_WIDTH/2 - u8g2.getStrWidth(header)/2, LCD_HEIGHT/2 + 14+2 , header);
-      */
+      draw_page(page, reading[page], feedlabel[page]);
     }
-
-    u8g2.sendBuffer();
+    paint();
   }
 
   //Short delay
   delay(10);
   counter--;
+  temp_counter--;
 }
 
-void outputReading(char* s, float value, int offset) {
-  //Buffer...
-  //char s[10] = "          ";
+void draw_header(uint8_t p) {
+  //Clear in RAM screen buffer
+  u8g2.clearBuffer();
 
-  //  lc1.clearDisplay(0);
+  //Draw header inversed across top using 6 pixel high font
+  //Font is 6 pixels high
+  u8g2.setFont(u8g2_font_profont10_mr);
+  u8g2.setFontMode(1);
+  u8g2.drawBox(0, 0, LCD_WIDTH, 6 + 2);
+  u8g2.setDrawColor(2);
 
-  float floored = floor(value);
-  float remainder = value - floored;
+  //Right align clock in top right corner
+  sprintf(charbuffer, "%02d:%02d", hour(), minute());
+  u8g2.drawStr(LCD_WIDTH - 1 - u8g2.getStrWidth(charbuffer), 6 + 1, charbuffer);
 
-  int decimaloffset = -1;
+  //ftoa(header, temperature, 10);
+  sprintf(charbuffer, "%02d.%d°C", temperature / 100, temperature % 10);
+  //header[4]='°';
+  //header[4] = 'C';
+  //header[5] = 0x00;
+  u8g2.drawStr(24, 6 + 1, charbuffer);
 
-  if (remainder != 0)  {
-    ftoa(s, value, 100);
-  } else {
-    itoa(floored, s, 10);
+  //Print current page in top left
+  sprintf(charbuffer, "%02d", p);
+  u8g2.drawStr(2, 6 + 1, charbuffer);
+}
+
+void draw_page(uint8_t p, int32_t value, char* label) {
+  //Inputs p=page, value=reading value
+
+  //Clear char buffer
+  //memset(charbuffer, 0, sizeof(charbuffer));
+
+  //Build up string of text
+  outputReading(charbuffer, value, 0);
+
+  //LCD is 84x48 pixels
+  u8g2.setDrawColor(1);
+  u8g2.setFontMode(0);
+
+  //May need to pick a smaller font if you need more than 99999.99 digits
+  //https://github.com/olikraus/u8g2/wiki/fntlistall
+  //Font is 19 pixels high
+  u8g2.setFont(u8g2_font_crox4hb_tn);
+
+  //Centre output horizontally
+  int width = u8g2.getStrWidth(charbuffer);
+
+  if (width > LCD_WIDTH) {
+    //Reading won't fit onto display, try smaller font
+    u8g2.setFont(u8g2_font_crox2hb_tn);
+    width = u8g2.getStrWidth(charbuffer);
   }
 
+  u8g2.drawStr(LCD_WIDTH / 2 - width / 2, LCD_HEIGHT - 10, charbuffer);
+
+  //Display units underneath reading
+
+  //Commented out for now as we dont know what units the values relate to.
+  u8g2.setFont(u8g2_font_profont11_mr);
+  u8g2.setDrawColor(1);
+  u8g2.setFontMode(0);
+
+  //TODO Add in units - but these need to be transmitted from emonHUB
+  //strcpy(charbuffer,"kW/h");
+  //u8g2.drawStr(LCD_WIDTH/2 - u8g2.getStrWidth(charbuffer)/2, LCD_HEIGHT , charbuffer);
+
+  u8g2.drawStr(LCD_WIDTH / 2 - u8g2.getStrWidth(label) / 2, 20 , label);
 }
 
-char *ftoa(char *a, double f, long p)
-{
-  //Copied from https://forum.arduino.cc/index.php?topic=59027.0
-  //tweaked to force 2 DP and fix bug
+void paint() {
+  //If the RFM module receives a packet at the same time as we try and update the display
+  //the display contents will corrupt, so switch off interputs for this call
+  noInterrupts();
+  u8g2.sendBuffer();
+  interrupts();
+}
 
-  //long p[] = {0,10,100,1000,10000,100000,1000000,10000000,100000000};
 
-  char *ret = a;
-  long heiltal = (long)f;
-  if (f > -1.00 && f < 0) {
-    //Looks like this has a bug with small negative numbers less than one
-    //for instance -0.25 appears as 0.25, as you cannot have "negative zero" in toe itoa routine, so fix that here
-    *a++ = '-';
-    *a++ = '0';
-  } else {
-    itoa(heiltal, a, 10);
-    while (*a != '\0') a++;
+void outputReading(char* s, int32_t value, int offset) {
+  //TODO: There are more code efficient SPRINTF routines available for Arduino
+  //      consider replacing when memory footprint gets tight.
+
+  int32_t v = value / 100;
+
+  //Strip out negative numbers from fractional part
+  if (value < 0) value *= -1;
+  uint8_t mod100 = value % 100;
+
+  s += sprintf(s, "%ld", v);
+
+  if (mod100 != 0) {
+    //Add in the decimal point
+    s[0] = '.';
+    s++;
+    ///Print the remainder (unsigned)
+    s += sprintf(s, "%u", mod100);
   }
-  *a++ = '.';
-  long desimal = abs((long)((f - heiltal) * p));
-  itoa(desimal, a, 10);
-  return ret;
 }
+

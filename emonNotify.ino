@@ -3,10 +3,12 @@
 
    ARDUINO BASED DISPLAY TOOL FOR VISUAL READINGS OF OPEN ENERGY MONITOR EMONCMS FEEDS
 
-   NEEDS RFM RECEIVER, AND MAX7219 BASED 8x8 SEGMENT LED OUTPUT MODULE
+   NEEDS RFM RECEIVER AND NOKIA 5110 STYLE LCD DISPLAY 84x48 PIXELS
 
   MIT License
+  
   Copyright (c) 2017 Stuart Pittaway
+
   Permission is hereby granted, free of charge, to any person obtaining a copy
   of this software and associated documentation files (the "Software"), to deal
   in the Software without restriction, including without limitation the rights
@@ -23,13 +25,14 @@
   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
   SOFTWARE.
 */
-
-#define RF69_COMPAT 1                                                    // Set to 1 if using RFM69CW or 0 is using RFM12B
-
 #define DEBUG 0   //Switch off (0) for normal use
 
-#define EMON_NOTIFY_DISPLAY_NUMBER 0        //Multiple display may be possible in the future with different outputs
+
+#define RF69_COMPAT 1                                                    // Set to 1 if using RFM69CW or 0 is using RFM12B
 #define RF_freq RF12_433MHZ                                              // Frequency of RF69CW module can be RF12_433MHZ, RF12_868MHZ or RF12_915MHZ. You should use the one matching the module you have.
+#define RF_FrequencyCorrection  1600
+
+#define EMON_NOTIFY_DISPLAY_NUMBER 0        //Multiple display may be possible in the future with different outputs
 
 //Time between pages in 10ms counts (500= 5 seconds)
 #define TIME_BETWEEN_PAGES 500;
@@ -38,7 +41,6 @@
 #define TIME_BETWEEN_TEMP_READINGS 3000;
 
 #define MAXIMUM_READING_BUFFER 10 //We reserve memory for maximum of 10 feed values, labels and readings
-#define RF_FrequencyCorrection  1600
 
 #define ONE_WIRE_BUS 4
 #define BACKLIGHT_LED_PIN 9
@@ -51,7 +53,6 @@
 #include <OneWire.h>
 #include <DallasTemperature.h>
 #include "U8g2lib.h"
-
 
 OneWire oneWire(ONE_WIRE_BUS);                                          // Setup a oneWire instance to communicate with any OneWire devices (not just Maxim/Dallas temperature ICs)
 DallasTemperature sensors(&oneWire);                                    // Pass our oneWire reference to Dallas Temperature.
@@ -129,6 +130,9 @@ void loop() {
     //Temperature in Celcius multiplied by 100
     temperature = sensors.getTempC(address_T1) * 100;
     temp_counter = TIME_BETWEEN_TEMP_READINGS;
+
+    //TODO: WE MAY AS WELL TRANSMIT THIS TEMPERATURE TO EMONPI/BASE
+    
   }
 
   if (counter == 0) {
@@ -264,6 +268,7 @@ void process_packet() {
 #if DEBUG
   Serial.print("device="); Serial.println(device);
 #endif
+
   //If this message is not for me, quit out
   if (device != EMON_NOTIFY_DISPLAY_NUMBER) return;
 
@@ -305,25 +310,25 @@ void process_packet() {
     uint8_t sequence = rf12_data[i++];
 
     if (sequence <= MAXIMUM_READING_BUFFER) {
-    /*
-        while (i < rf12_len) {
-          Serial.print(rf12_data[i], HEX);
-          Serial.print(' ');
-          i++;
-        }
-        Serial.println();
-    */
-    strncpy(feedlabel[sequence], &rf12_data[i], sizeof(feedlabel[sequence]) );
+      /*
+          while (i < rf12_len) {
+            Serial.print(rf12_data[i], HEX);
+            Serial.print(' ');
+            i++;
+          }
+          Serial.println();
+      */
+      strncpy(feedlabel[sequence], &rf12_data[i], sizeof(feedlabel[sequence]) );
 
-    i += strlen(&rf12_data[i]) + 1;
+      i += strlen(&rf12_data[i]) + 1;
 
-    strncpy(feedunits[sequence], &rf12_data[i], sizeof(feedunits[sequence]) );
+      strncpy(feedunits[sequence], &rf12_data[i], sizeof(feedunits[sequence]) );
 
 #if DEBUG
-    Serial.println(feedlabel[sequence]);
-    Serial.println(feedunits[sequence]);
+      Serial.println(feedlabel[sequence]);
+      Serial.println(feedunits[sequence]);
 #endif
-    
+
     }
     return;
   }
